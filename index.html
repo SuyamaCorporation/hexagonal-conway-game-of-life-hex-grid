@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>六角形グリッド Conway 生命ゲーム</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  body { background: #0a0f1e; }
+  canvas { cursor: crosshair; }
+  input[type=range] { accent-color: #34d399; }
+  select { background: #1f2937; color: white; border: 1px solid #374151; }
+</style>
+</head>
+<body class="min-h-screen text-white flex flex-col items-center py-6 px-4">
+  <h1 class="text-2xl font-bold mb-1 text-emerald-400">六角形グリッド Conway 生命ゲーム</h1>
+  <p class="text-sm text-gray-400 mb-4">隣接6セルルールによる生命の誕生と絶滅 ｜ クリックで手書き</p>
+
+  <div class="flex flex-col lg:flex-row gap-6 items-start justify-center w-full max-w-5xl">
+    <div class="flex flex-col items-center gap-3">
+      <canvas id="canvas" width="560" height="440" class="border border-gray-700 rounded-lg shadow-lg"></canvas>
+      <div class="flex gap-2 flex-wrap justify-center">
+        <button id="btnStart" class="px-5 py-2 bg-emerald-600 hover:bg-emerald-500 rounded-lg font-semibold transition-colors">開始</button>
+        <button id="btnStop" class="px-5 py-2 bg-gray-600 hover:bg-gray-500 rounded-lg font-semibold transition-colors">停止</button>
+        <button id="btnStep" class="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg font-semibold transition-colors text-sm">1世代</button>
+        <button id="btnRandom" class="px-4 py-2 bg-teal-700 hover:bg-teal-600 rounded-lg font-semibold transition-colors text-sm">ランダム</button>
+        <button id="btnClear" class="px-4 py-2 bg-gray-800 hover:bg-gray-700 rounded-lg font-semibold transition-colors text-sm">クリア</button>
+      </div>
+    </div>
+
+    <div class="bg-gray-900 border border-gray-700 rounded-xl p-5 w-full max-w-sm">
+      <h2 class="text-lg font-semibold text-emerald-300 mb-4">パラメータ</h2>
+
+      <div class="space-y-4">
+        <div>
+          <label class="text-sm text-gray-300 mb-1 block">生存ルール</label>
+          <select id="selectRule" class="w-full px-3 py-2 rounded-lg text-sm">
+            <option value="23/36">B2/S3 (標準Conway変形)</option>
+            <option value="234/34" selected>B2/S34 (Hex推奨)</option>
+            <option value="12/23">B12/S23 (密集型)</option>
+            <option value="3/36">B3/S36 (複雑型)</option>
+            <option value="2/35">B2/S35</option>
+          </select>
+          <p class="text-xs text-gray-500 mt-1">B=誕生に必要な隣接生存数 / S=生存継続に必要な隣接数</p>
+        </div>
+
+        <div>
+          <label class="text-sm text-gray-300 flex justify-between mb-1">
+            <span>世代速度</span>
+            <span id="valSpeed" class="text-emerald-400 font-mono">150</span><span class="text-xs text-gray-500">ms</span>
+          </label>
+          <input type="range" id="sliderSpeed" min="30" max="800" value="150" step="10" class="w-full">
+        </div>
+
+        <div>
+          <label class="text-sm text-gray-300 flex justify-between mb-1">
+            <span>ランダム密度</span>
+            <span id="valDensity" class="text-emerald-400 font-mono">30</span><span class="text-xs text-gray-500">%</span>
+          </label>
+          <input type="range" id="sliderDensity" min="5" max="80" value="30" class="w-full">
+        </div>
+      </div>
+
+      <div class="mt-5 border-t border-gray-700 pt-4 grid grid-cols-2 gap-3 text-sm">
+        <div class="bg-gray-800 rounded-lg p-3 text-center">
+          <div class="text-xs text-gray-500 mb-1">世代</div>
+          <div id="genCount" class="text-emerald-400 font-mono text-xl font-bold">0</div>
+        </div>
+        <div class="bg-gray-800 rounded-lg p-3 text-center">
+          <div class="text-xs text-gray-500 mb-1">生存セル</div>
+          <div id="aliveCount" class="text-teal-400 font-mono text-xl font-bold">0</div>
+        </div>
+      </div>
+
+      <div class="mt-4 border-t border-gray-700 pt-4">
+        <h3 class="text-sm font-semibold text-gray-400 mb-2">凡例</h3>
+        <div class="space-y-1 text-xs">
+          <div class="flex items-center gap-2"><div class="w-4 h-4 rounded" style="background:#34d399"></div><span class="text-gray-300">生存セル</span></div>
+          <div class="flex items-center gap-2"><div class="w-4 h-4 rounded" style="background:#1a2a1a"></div><span class="text-gray-300">死滅セル</span></div>
+        </div>
+        <p class="text-xs text-gray-500 mt-2">カンバス上をクリック/ドラッグでセルを手書き</p>
+      </div>
+    </div>
+  </div>
+
+<script>
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+
+const HEX_SIZE = 11;
+const COLS = 32;
+const ROWS = 26;
+
+// offset coordinate: even-q
+// each hex center:
+function hexCenter(col, row) {
+  const x = HEX_SIZE * Math.sqrt(3) * (col + (row % 2) * 0.5) + HEX_SIZE * Math.sqrt(3) / 2 + 10;
+  const y = HEX_SIZE * 1.5 * row + HEX_SIZE + 10;
+  return { x, y };
+}
+
+function hexNeighbors(col, row) {
+  const even = row % 2 === 0;
+  return [
+    [col + 1, row],
+    [col - 1, row],
+    [col, row - 1],
+    [col, row + 1],
+    [even ? col - 1 : col + 1, row - 1],
+    [even ? col - 1 : col + 1, row + 1],
+  ].filter(([c, r]) => c >= 0 && c < COLS && r >= 0 && r < ROWS);
+}
+
+let cells = new Uint8Array(COLS * ROWS);
+let nextCells = new Uint8Array(COLS * ROWS);
+let generation = 0;
+let running = false;
+let animHandle = null;
+let speed = 150;
+let density = 30;
+let birthRule = new Set([2, 3, 4]);
+let surviveRule = new Set([3, 4]);
+
+function parseRule(str) {
+  const [b, s] = str.split('/');
+  birthRule = new Set(b.split('').map(Number));
+  surviveRule = new Set(s.split('').map(Number));
+}
+
+function idx(col, row) { return row * COLS + col; }
+
+function randomize() {
+  for (let r = 0; r < ROWS; r++)
+    for (let c = 0; c < COLS; c++)
+      cells[idx(c, r)] = Math.random() < density / 100 ? 1 : 0;
+  generation = 0;
+  updateStats();
+  render();
+}
+
+function clear() {
+  cells.fill(0);
+  generation = 0;
+  updateStats();
+  render();
+}
+
+function step() {
+  for (let r = 0; r < ROWS; r++) {
+    for (let c = 0; c < COLS; c++) {
+      const neighbors = hexNeighbors(c, r);
+      const alive = neighbors.reduce((sum, [nc, nr]) => sum + cells[idx(nc, nr)], 0);
+      const cur = cells[idx(c, r)];
+      if (cur) {
+        nextCells[idx(c, r)] = surviveRule.has(alive) ? 1 : 0;
+      } else {
+        nextCells[idx(c, r)] = birthRule.has(alive) ? 1 : 0;
+      }
+    }
+  }
+  [cells, nextCells] = [nextCells, cells];
+  generation++;
+  updateStats();
+}
+
+function updateStats() {
+  document.getElementById('genCount').textContent = generation;
+  let alive = 0;
+  for (let i = 0; i < cells.length; i++) if (cells[i]) alive++;
+  document.getElementById('aliveCount').textContent = alive;
+}
+
+function drawHex(cx, cy, size, filled, fresh) {
+  ctx.beginPath();
+  for (let i = 0; i < 6; i++) {
+    const angle = Math.PI / 180 * (60 * i - 30);
+    const px = cx + size * Math.cos(angle);
+    const py = cy + size * Math.sin(angle);
+    i === 0 ? ctx.moveTo(px, py) : ctx.lineTo(px, py);
+  }
+  ctx.closePath();
+  if (filled) {
+    ctx.fillStyle = fresh ? '#6ee7b7' : '#34d399';
+    ctx.fill();
+    ctx.strokeStyle = '#059669';
+    ctx.lineWidth = 0.5;
+    ctx.stroke();
+  } else {
+    ctx.fillStyle = '#0f1f14';
+    ctx.fill();
+    ctx.strokeStyle = '#1a3328';
+    ctx.lineWidth = 0.5;
+    ctx.stroke();
+  }
+}
+
+function render() {
+  ctx.fillStyle = '#0a1a10';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  for (let r = 0; r < ROWS; r++) {
+    for (let c = 0; c < COLS; c++) {
+      const { x, y } = hexCenter(c, r);
+      drawHex(x, y, HEX_SIZE - 1, cells[idx(c, r)] === 1);
+    }
+  }
+}
+
+function loop() {
+  step();
+  render();
+  if (running) animHandle = setTimeout(loop, speed);
+}
+
+function pixelToHex(px, py) {
+  for (let r = 0; r < ROWS; r++) {
+    for (let c = 0; c < COLS; c++) {
+      const { x, y } = hexCenter(c, r);
+      const dx = px - x, dy = py - y;
+      if (Math.sqrt(dx*dx + dy*dy) < HEX_SIZE) return [c, r];
+    }
+  }
+  return null;
+}
+
+let drawing = false;
+canvas.addEventListener('mousedown', e => {
+  drawing = true;
+  const rect = canvas.getBoundingClientRect();
+  const scaleX = canvas.width / rect.width;
+  const scaleY = canvas.height / rect.height;
+  const hit = pixelToHex((e.clientX - rect.left) * scaleX, (e.clientY - rect.top) * scaleY);
+  if (hit) {
+    const [c, r] = hit;
+    cells[idx(c, r)] = cells[idx(c, r)] ? 0 : 1;
+    updateStats();
+    render();
+  }
+});
+canvas.addEventListener('mousemove', e => {
+  if (!drawing) return;
+  const rect = canvas.getBoundingClientRect();
+  const scaleX = canvas.width / rect.width;
+  const scaleY = canvas.height / rect.height;
+  const hit = pixelToHex((e.clientX - rect.left) * scaleX, (e.clientY - rect.top) * scaleY);
+  if (hit) {
+    const [c, r] = hit;
+    cells[idx(c, r)] = 1;
+    updateStats();
+    render();
+  }
+});
+canvas.addEventListener('mouseup', () => { drawing = false; });
+
+document.getElementById('btnStart').addEventListener('click', () => {
+  if (!running) { running = true; loop(); }
+});
+document.getElementById('btnStop').addEventListener('click', () => {
+  running = false; clearTimeout(animHandle);
+});
+document.getElementById('btnStep').addEventListener('click', () => {
+  step(); render();
+});
+document.getElementById('btnRandom').addEventListener('click', randomize);
+document.getElementById('btnClear').addEventListener('click', clear);
+
+document.getElementById('sliderSpeed').addEventListener('input', e => {
+  speed = parseInt(e.target.value);
+  document.getElementById('valSpeed').textContent = speed;
+});
+document.getElementById('sliderDensity').addEventListener('input', e => {
+  density = parseInt(e.target.value);
+  document.getElementById('valDensity').textContent = density;
+});
+document.getElementById('selectRule').addEventListener('change', e => {
+  parseRule(e.target.value);
+});
+
+parseRule('234/34');
+randomize();
+</script>
+</body>
+</html>
